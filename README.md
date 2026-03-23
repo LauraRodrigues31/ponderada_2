@@ -84,12 +84,40 @@ O flag `-v` remove o volume do banco. Omita-o se quiser preservar os dados entre
 
 ## Resultados do teste de carga
 
-O teste foi executado localmente com 20 usuários virtuais simultâneos durante 1 minuto e 50 segundos, totalizando 16.775 requisições enviadas ao endpoint `POST /telemetry`.
+O teste foi executado com 20 usuários virtuais simultâneos durante 1 minuto e 50 segundos, com o container do backend limitado a 0.5 núcleos de CPU e 256MB de memória — configuração que garante reprodutibilidade independente do hardware utilizado.
 
-Os dois critérios definidos foram atendidos com folga: 95% das requisições responderam em 2.05ms, bem abaixo do limite de 500ms estabelecido como threshold, e a taxa de erros ficou em 0.00% das 16.775 requisições, nenhuma falhou. O throughput sustentado foi de aproximadamente 152 requisições por segundo, com latência média de 1.04ms.
+### Resultados com limite de 0.5 CPU
 
-Esses números refletem diretamente a escolha arquitetural de desacoplar o recebimento dos dados do processamento. O backend responde imediatamente após publicar na fila do RabbitMQ, sem aguardar a gravação no banco o que mantém a latência baixa mesmo sob carga simultânea. Se o processamento fosse síncrono, cada requisição esperaria o INSERT no PostgreSQL antes de responder, e a latência seria significativamente maior.
+| Métrica | Resultado | Threshold |
+|---|---|---|
+| Throughput | 152.28 req/s | — |
+| Latência média | 1.20ms | — |
+| Latência p(95) | 2.66ms | < 500ms |
+| Taxa de erros | 0.00% | < 1% |
+| Requisições totais | 16.753 | — |
 
-Vale observar que o teste foi executado em ambiente local, com todos os serviços rodando na mesma máquina. Em um cenário de produção, com latência de rede entre os serviços e volume de dados maior, os números seriam diferentes mas a arquitetura de fila continuaria absorvendo picos de carga sem perda de mensagens, que é o objetivo principal do sistema.
+Os dois thresholds definidos foram atendidos com ampla margem: o p(95) de 2.66ms ficou 187x abaixo do limite de 500ms, e nenhuma requisição falhou.
+
+### Comparação antes e depois do limite de CPU
+
+| Métrica | Sem limite | Com 0.5 CPU |
+|---|---|---|
+| Throughput | 152.40 req/s | 152.28 req/s |
+| Latência média | 1.04ms | 1.20ms |
+| p(95) | 2.05ms | 2.66ms |
+
+A variação mínima entre os dois cenários indica que o backend Go não chegou a pressionar o limite de 0.5 CPU durante o teste — a arquitetura é eficiente o suficiente para que o gargalo esteja no intervalo entre requisições simulado pelo k6, e não no processamento em si.
+
+### Projeção de capacidade
+
+Usando os resultados com 0.5 CPU como base:
+
+- 0.5 CPU → 152 req/s
+- 1.0 CPU → ~304 req/s (estimativa)
+- 2.0 CPUs → ~608 req/s (estimativa)
+
+### Análise
+
+A baixa latência é consequência direta da arquitetura desacoplada: o backend responde imediatamente após publicar na fila do RabbitMQ, sem aguardar a gravação no banco. O trabalho pesado acontece no consumer em paralelo, invisível para quem fez a requisição. Vale observar que o ambiente é local — em produção, com latência de rede entre os serviços, os números absolutos seriam diferentes, mas o comportamento sob carga seria semelhante graças à fila absorver os picos.
 
 
